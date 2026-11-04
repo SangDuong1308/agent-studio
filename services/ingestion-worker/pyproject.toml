@@ -1,0 +1,28 @@
+[project]
+name = "agent-studio-ingestion-worker"
+version = "0.1.0"
+description = "Consumes ingestion jobs: chunk, embed (Vertex AI), upsert to pgvector"
+requires-python = ">=3.11"
+dependencies = [
+    "agent-studio-common",
+    "agent-studio-db",
+]
+
+[project.optional-dependencies]
+# vertex = ["langchain-google-genai>=2.0"]
+vertex = ["langchain-google-vertexai>=3.0,<4.0"]
+test = ["pytest>=8", "pytest-asyncio>=0.23", "aiosqlite>=0.20"]
+
+[tool.uv.sources]
+agent-studio-common = { workspace = true }
+agent-studio-db = { workspace = true }
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"

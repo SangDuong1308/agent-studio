@@ -1,0 +1,58 @@
+"""resize document_chunks.embedding from vector(768) to vector(1536)
+
+Switches the embedding column to 1536 dimensions to match the Gemini
+`gemini-embedding-001` model configured to output 1536-d vectors
+(output_dimensionality=1536). 1536 < 2000, so the ivfflat index is still valid
+and we keep `vector` (no need for halfvec/HNSW).
+
+Existing 768-d vectors cannot be converted to 1536-d, so we TRUNCATE the chunks
+first. Agents must be re-created (re-ingested) after this migration so their
+documents are re-embedded at the new dimension.
+
+Revision ID: 0002
+Revises: 0001
+Create Date: 2026-01-02 00:00:00
+"""
+
+from typing import Sequence, Union
+
+from alembic import op
+
+revision: str = "0002"
+down_revision: Union[str, None] = "0001"
+branch_labels: Union[str, Sequence[str], None] = None
+depends_on: Union[str, Sequence[str], None] = None
+
+OLD_DIM = 768
+NEW_DIM = 1536
+
+
+def upgrade() -> None:
+    # Old 768-d vectors are incompatible with 1536-d; drop the data first.
+    op.execute("TRUNCATE TABLE document_chunks")
+    # The ivfflat index must be dropped before altering the column type.
+    op.execute("DROP INDEX IF EXISTS ix_document_chunks_embedding")
+    op.execute(
+        f"ALTER TABLE document_chunks "
+        f"ALTER COLUMN embedding TYPE vector({NEW_DIM}) USING NULL"
+    )
+    # Recreate the approximate-nearest-neighbour index (cosine).
+    op.execute(
+        "CREATE INDEX ix_document_chunks_embedding "
+        "ON document_chunks USING ivfflat (embedding vector_cosine_ops) "
+        "WITH (lists = 100)"
+    )
+
+
+def downgrade() -> None:
+    op.execute("TRUNCATE TABLE document_chunks")
+    op.execute("DROP INDEX IF EXISTS ix_document_chunks_embedding")
+    op.execute(
+        f"ALTER TABLE document_chunks "
+        f"ALTER COLUMN embedding TYPE vector({OLD_DIM}) USING NULL"
+    )
+    op.execute(
+        "CREATE INDEX ix_document_chunks_embedding "
+        "ON document_chunks USING ivfflat (embedding vector_cosine_ops) "
+        "WITH (lists = 100)"
+    )

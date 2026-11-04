@@ -1,0 +1,43 @@
+%% System overview. Keep in sync with the first diagram in architecture.md.
+flowchart LR
+  subgraph client["1 · Client"]
+    ui["Next.js (App Router)<br/>React Query · Zustand"]
+  end
+
+  subgraph edge["2 · API edge"]
+    gw["Gateway · FastAPI<br/>JWT · rate limits · validation · CORS<br/>agents CRUD + edit · chat history<br/>starts sagas"]
+  end
+
+  subgraph bus["3 · Messaging"]
+    mq{{"RabbitMQ<br/>topic exchange<br/>+ dead-letter queues"}}
+  end
+
+  subgraph svc["4 · Backend services"]
+    orch["Orchestrator<br/>Saga: provision / update<br/>+ timeout reaper"]
+    ing["Ingestion worker<br/>chunk → embed → store"]
+    rt["Agent runtime · LangGraph<br/>supervisor → rewriter → retriever → writer"]
+  end
+
+  subgraph data["5 · Data"]
+    pg[("PostgreSQL + pgvector<br/>users · agents · documents · chunks (HNSW)<br/>tools · chat_messages · saga_state")]
+  end
+
+  subgraph ext["6 · External (GCP)"]
+    vx["Vertex AI<br/>Gemini · text-embedding-005"]
+    lf["LangFuse<br/>traces"]
+  end
+
+  ui -- "REST + JWT" --> gw
+  gw -- "CRUD · save / load chat" --> pg
+  gw -- "provision.requested" --> mq
+  gw -- "question + recent history<br/>+ X-Internal-Key" --> rt
+
+  mq <-- "in: provision.requested, ingestion.succeeded / failed<br/>out: ingestion.requested" --> orch
+  mq <-- "in: ingestion.requested<br/>out: ingestion.succeeded / failed" --> ing
+
+  orch -- "saga state · activate · compensate" --> pg
+  ing -- "store vectors" --> pg
+  ing -- "embed documents" --> vx
+  rt -- "retrieve top-k" --> pg
+  rt -- "embed question · generate answer" --> vx
+  rt -. "traces" .-> lf

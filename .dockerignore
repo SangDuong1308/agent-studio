@@ -1,0 +1,31 @@
+# Build context for the backend images is the repo root. Keep secrets, caches
+# and unrelated folders out of it (faster builds, nothing sensitive sent to the
+# Docker daemon).
+.git
+.venv
+**/.venv
+**/__pycache__
+**/*.pyc
+**/*.egg-info
+.pytest_cache
+.ruff_cache
+.mypy_cache
+.coverage
+htmlcov
+
+# Secrets
+.env
+.env.*
+!.env.example
+gcp-key.json
+service-account*.json
+*.pem
+
+# Not needed by backend images
+frontend
+deploy
+.github
+.langgraph_api
+*.png
+docs.py
+DATA_FLOW_vi.md

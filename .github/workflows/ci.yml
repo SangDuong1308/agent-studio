@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["main"]
+  pull_request:
+
+# Least privilege for the default token, and cancel superseded runs on a branch.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    # Advisory for now: the existing code has ~50 lint findings (import order,
+    # long lines). Remove `continue-on-error` once `ruff check .` is clean.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uvx ruff check .
+
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install packages + services
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ./packages/common -e ./packages/db \
+            -e "./services/gateway[test]" \
+            -e "./services/orchestrator[test]" \
+            -e "./services/ingestion-worker[test]" \
+            -e "./services/agent-runtime[test]"
+          pip install email-validator
+      - name: Run backend tests
+        env:
+          LLM_PROVIDER: fake
+          JWT_SECRET: ci-secret
+        run: |
+          for s in gateway orchestrator ingestion-worker agent-runtime; do
+            echo "== $s ==" && (cd services/$s && python -m pytest -q)
+          done
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - run: npm ci || npm install
+      - run: npm test
+      - run: npm run build

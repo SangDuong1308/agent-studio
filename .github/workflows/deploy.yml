@@ -1,0 +1,59 @@
+# Build + push images to Google Artifact Registry, then deploy to GKE.
+# Requires repo secrets: GCP_PROJECT, GCP_REGION, GKE_CLUSTER, GCP_SA_KEY.
+# Triggered manually or on push to main after CI passes.
+name: Deploy
+
+on:
+  workflow_dispatch:
+  # push:
+  #   branches: ["main"]
+
+env:
+  REGION: ${{ secrets.GCP_REGION }}
+  PROJECT: ${{ secrets.GCP_PROJECT }}
+  REPO: agent-studio # Artifact Registry repository name
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker ${REGION}-docker.pkg.dev --quiet
+
+      - name: Build & push images
+        run: |
+          TAG=${GITHUB_SHA::7}
+          BASE=${REGION}-docker.pkg.dev/${PROJECT}/${REPO}
+          for svc in gateway orchestrator ingestion-worker agent-runtime; do
+            docker build -f services/$svc/Dockerfile -t $BASE/agent-studio-$svc:$TAG .
+            docker push $BASE/agent-studio-$svc:$TAG
+          done
+          docker build -f frontend/Dockerfile -t $BASE/agent-studio-frontend:$TAG frontend
+          docker push $BASE/agent-studio-frontend:$TAG
+          echo "TAG=$TAG" >> $GITHUB_ENV
+          echo "BASE=$BASE" >> $GITHUB_ENV
+
+      - name: Get GKE credentials
+        uses: google-github-actions/get-gke-credentials@v2
+        with:
+          cluster_name: ${{ secrets.GKE_CLUSTER }}
+          location: ${{ secrets.GCP_REGION }}
+
+      - name: Deploy
+        run: |
+          kubectl apply -f deploy/k8s/namespace.yaml
+          # Secrets are expected to already exist in the cluster.
+          for f in postgres rabbitmq gateway orchestrator ingestion-worker agent-runtime frontend; do
+            sed -e "s#REGISTRY/agent-studio-\([a-z-]*\):TAG#${BASE}/agent-studio-\1:${TAG}#g" \
+              deploy/k8s/$f.yaml | kubectl apply -f -
+          done
+          kubectl -n agent-studio rollout status deploy/gateway --timeout=180s

@@ -1,0 +1,170 @@
+# ---------------------------------------------------------------------------
+# Local development stack. Run from repo root:
+#   docker compose -f deploy/docker-compose.yml --env-file .env up --build
+#
+# Bring up ONLY infra (Postgres + RabbitMQ) while you run services on the host:
+#   docker compose -f deploy/docker-compose.yml --env-file .env up postgres rabbitmq
+#
+# Network exposure: only the frontend and gateway are published, and every
+# published port is bound to 127.0.0.1 so other machines on your network cannot
+# reach them. agent-runtime and orchestrator have no published ports at all;
+# they are reachable only from other containers on the compose network.
+# ---------------------------------------------------------------------------
+name: agent-studio
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS}
+    ports:
+      - "127.0.0.1:5672:5672"    # AMQP
+      - "127.0.0.1:15672:15672"  # management UI -> http://localhost:15672
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+
+  # One-shot job: applies Alembic migrations, then exits. App services wait for
+  # it, so a fresh machine ends up with a ready schema after a single `up`.
+  migrate:
+    build:
+      context: ..
+      dockerfile: services/gateway/Dockerfile
+    command: ["sh", "-c", "cd /app/packages/db && alembic upgrade head"]
+    env_file: ../.env
+    environment:
+      POSTGRES_HOST: postgres
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  gateway:
+    build:
+      context: ..
+      dockerfile: services/gateway/Dockerfile
+    restart: unless-stopped
+    env_file: ../.env
+    environment:
+      POSTGRES_HOST: postgres
+    ports:
+      - "127.0.0.1:8001:8001"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/health', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+  orchestrator:
+    build:
+      context: ..
+      dockerfile: services/orchestrator/Dockerfile
+    restart: unless-stopped
+    env_file: ../.env
+    environment:
+      POSTGRES_HOST: postgres
+      SAGA_TIMEOUT_SECONDS: ${SAGA_TIMEOUT_SECONDS:-300}
+      SAGA_REAPER_INTERVAL_SECONDS: ${SAGA_REAPER_INTERVAL_SECONDS:-30}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8002/health', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+  ingestion-worker:
+    build:
+      context: ..
+      dockerfile: services/ingestion-worker/Dockerfile
+    restart: unless-stopped
+    env_file: ../.env
+    environment:
+      POSTGRES_HOST: postgres
+    volumes:
+      - ../gcp-key.json:/secrets/gcp-key.json:ro
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+  agent-runtime:
+    build:
+      context: ..
+      dockerfile: services/agent-runtime/Dockerfile
+    restart: unless-stopped
+    env_file: ../.env
+    environment:
+      POSTGRES_HOST: postgres
+    volumes:
+      - ../gcp-key.json:/secrets/gcp-key.json:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8003/health', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8001
+    ports:
+      - "127.0.0.1:3000:3000"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    depends_on:
+      - gateway
+
+volumes:
+  pgdata:

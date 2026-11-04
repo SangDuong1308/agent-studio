@@ -1,0 +1,31 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ingestion-worker
+  namespace: agent-studio
+spec:
+  # Workers scale horizontally: RabbitMQ load-balances ingestion jobs across
+  # all replicas (competing consumers pattern).
+  replicas: 2
+  selector:
+    matchLabels:
+      app: ingestion-worker
+  template:
+    metadata:
+      labels:
+        app: ingestion-worker
+    spec:
+      containers:
+        - name: ingestion-worker
+          image: REGISTRY/agent-studio-ingestion-worker:TAG
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - secretRef:
+                name: agent-studio-secrets
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi

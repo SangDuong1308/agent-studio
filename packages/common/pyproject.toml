@@ -1,0 +1,24 @@
+[project]
+name = "agent-studio-common"
+version = "0.1.0"
+description = "Shared settings, logging, messaging, and LLM interface for Agent Studio"
+requires-python = ">=3.11"
+dependencies = [
+    "pydantic>=2.7",
+    "pydantic-settings>=2.3",
+    "aio-pika>=9.4",
+    "structlog>=24.1",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[project.optional-dependencies]
+vertex = [
+    "langchain-google-vertexai>=3.0,<4.0",
+    "langchain-core>=0.3",
+]
